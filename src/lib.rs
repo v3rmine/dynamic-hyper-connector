@@ -1,53 +1,44 @@
-use std::sync::Arc;
-
-use futures_util::{future::BoxFuture, AsyncRead, AsyncWrite};
-use hyper::{client::HttpConnector, service::Service, Body, Client, Uri};
+use futures_util::future::BoxFuture;
+use hyper::{client::connect::Connect, Uri};
 use hyperlocal::UnixConnector;
+use tower::Service;
 
-trait DynResponse: Send + Sync {}
-impl<T> DynResponse for T
-where
-    T: AsyncRead + AsyncWrite,
-    T: Send + Sync,
-{
+type UnixStream = <UnixConnector as Service<Uri>>::Response;
+
+pub fn new_connector(
+    url: &str,
+) -> impl Connect
+       + Clone
+       + Service<
+    Uri,
+    Response = UnixStream,
+    Error = std::io::Error,
+    Future = BoxFuture<'static, Result<UnixStream, std::io::Error>>,
+> {
+    // if url.starts_with("unix://") {
+    //     Either::A(UnixConnector::default())
+    // } else {
+    //     Either::B(HttpConnector::new())
+    // }
+    UnixConnector::default()
 }
-type ArcDynResponse = Arc<dyn DynResponse>;
 
-trait DynError: Send + Sync {}
-impl<T> DynError for T
-where
-    T: std::error::Error,
-    T: Send + Sync,
-{
-}
-type ArcDynError = Arc<dyn DynError>;
+#[cfg(test)]
+mod tests {
+    use hyper::{Body, Client, Request};
 
-type DynamicConnector = Arc<
-    dyn Service<
-        Uri,
-        Response = ArcDynResponse,
-        Error = ArcDynError,
-        Future = BoxFuture<'static, Result<ArcDynResponse, ArcDynError>>,
-    >,
->;
+    use crate::new_connector;
 
-fn new_connector(url: &str) -> DynamicConnector {
-    if url.starts_with("unix://") {
-        Arc::new(UnixConnector::default())
-    } else {
-        Arc::new(HttpConnector::new())
+    #[tokio::test]
+    async fn test() -> Result<(), Box<dyn std::error::Error>> {
+        let url = "unix:///tmp/socket";
+        let client = Client::builder().build(new_connector(url));
+
+        let uri = hyperlocal::Uri::new("/tmp/socket", "/hello");
+        let req = Request::builder().uri(uri).body(Body::empty())?;
+        let res = client.request(req).await?;
+        dbg!(res);
+
+        Ok(())
     }
-}
-
-fn generic_client(url: &str) -> Client<DynamicConnector, Body> {
-    Client::builder().build(new_connector(url))
-}
-
-// Individual Builds
-fn build_unix() -> Client<UnixConnector, Body> {
-    Client::builder().build(UnixConnector::default())
-}
-
-fn build_http() -> Client<HttpConnector, Body> {
-    Client::builder().build(HttpConnector::new())
 }
